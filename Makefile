@@ -1,4 +1,31 @@
-export DEVELOPER_DIR := /Applications/Xcode.app/Contents/Developer
+# Which Xcode every xcodebuild call below runs against. Not hardcoded to
+# /Applications/Xcode.app because `xcodes` installs version-suffixed bundles
+# (/Applications/Xcode-26.6.0.app) and a fixed path resolves to nothing on a
+# machine set up that way — xcodebuild then dies with "unable to find utility",
+# which reads like a broken toolchain rather than a wrong path.
+#
+# An active `xcode-select -p` wins, so switching toolchains needs no edit here.
+# A bare Command Line Tools path does not count: it has no xcodebuild that can
+# build a scheme. Failing that, the newest bundle in /Applications is picked,
+# with the unsuffixed Xcode.app preferred as the one someone chose to install
+# under the canonical name.
+#
+# The `(` opening each case pattern is load-bearing: make counts parentheses
+# inside $(shell ...), and an unbalanced `)` ends the function mid-command.
+DEVELOPER_DIR ?= $(shell \
+	active=$$(xcode-select -p 2>/dev/null); \
+	case "$$active" in (*.app/Contents/Developer) echo "$$active"; exit 0;; esac; \
+	for app in /Applications/Xcode.app $$(ls -d /Applications/Xcode-*.app 2>/dev/null | sort -rV); do \
+		[ -d "$$app/Contents/Developer" ] && { echo "$$app/Contents/Developer"; exit 0; }; \
+	done)
+# Skipped entirely when nothing was found: an empty DEVELOPER_DIR in the
+# environment is worse than none, since /usr/bin/xcodebuild is an xcrun shim
+# that refuses to start on an invalid path. The `:=` freezes the probe so it
+# runs once per make, not once per recipe, and an environment or command-line
+# DEVELOPER_DIR passes through untouched.
+ifneq ($(DEVELOPER_DIR),)
+export DEVELOPER_DIR := $(DEVELOPER_DIR)
+endif
 
 PROJECT := Codenotch.xcodeproj
 SCHEME  := Codenotch

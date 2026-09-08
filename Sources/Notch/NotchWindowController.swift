@@ -412,20 +412,37 @@ final class NotchWindowController {
 
     /// Move the notch to another screen edge.
     ///
-    /// It goes out where it was, crosses while there is nothing to see, and
-    /// then **opens** where it now is — the same unfold hovering uses, so a
-    /// move ends the way reaching for it does rather than with a bar appearing
-    /// at full size.
-    ///
-    /// Changing the placement moves the panel, turns the shape on its side and
-    /// relays the whole stack, all in one frame. Done in view that is a jump no
-    /// animation can smooth over, and animating a panel across a corner looks
-    /// like a bug rather than a choice — hence the crossing rather than a
-    /// slide.
+    /// The case the crossing below was written for: a move turns the shape on
+    /// its side and lands it on the far side of the display, and animating a
+    /// panel across a corner looks like a bug rather than a choice.
     func apply(edge: NotchEdge) {
         guard model.edge != edge else { return }
+        restage { $0.edge = edge }
+    }
+
+    /// Draw the notch at another size.
+    ///
+    /// Takes the same route out and back as a move rather than a mechanism of
+    /// its own, because it is the same kind of change: the body, the rings, the
+    /// type and the tooltip's whole budget are all re-measured at once. The
+    /// only difference is that this jump happens where the notch already is.
+    func apply(size: NotchSize) {
+        guard model.size != size else { return }
+        restage { $0.size = size }
+    }
+
+    /// Fade out, reshape while there is nothing on screen to see it, then come
+    /// back **opening** — the same unfold hovering uses, so the change ends the
+    /// way reaching for the notch does rather than with a bar appearing at full
+    /// size.
+    ///
+    /// `change` is the one write that reshapes everything: it relays the whole
+    /// stack and re-sizes the panel in a single frame, which is a jump no
+    /// animation can smooth over. Hiding it inside the crossing is what stops
+    /// it reading as a glitch.
+    private func restage(_ change: @escaping (NotchViewModel) -> Void) {
         guard let panel else {   // before there is anything on screen to fade
-            model.edge = edge
+            change(model)
             relocate()
             return
         }
@@ -434,22 +451,23 @@ final class NotchWindowController {
         model.hoveredIndex = nil
         setPointing(false)
 
-        // Clicking through the picker starts a move before the last one has
-        // landed, and a stale completion would drop the notch on an edge the
+        // Clicking through a picker starts one change before the last has
+        // landed, and a stale completion would drop the notch into a shape the
         // user has already moved on from.
-        edgeChange += 1
-        let change = edgeChange
+        restagings += 1
+        let restaging = restagings
 
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = Self.edgeCrossfade
+            context.duration = Self.crossfade
             panel.animator().alphaValue = 0
         } completionHandler: { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, let panel = self.panel, change == self.edgeChange else { return }
+                guard let self, let panel = self.panel,
+                      restaging == self.restagings else { return }
 
                 // Land folded, and at full strength: the opening *is* the
                 // animation, and fading in underneath it would be two at once.
-                self.model.edge = edge
+                change(self.model)
                 self.model.isExpanded = false
                 self.relocate()
                 self.updateInteractiveRects()
@@ -461,7 +479,7 @@ final class NotchWindowController {
                 // notch arrives at full size having animated nothing.
                 DispatchQueue.main.asyncAfter(deadline: .now() + Self.arrivalBeat) {
                     MainActor.assumeIsolated {
-                        guard change == self.edgeChange else { return }
+                        guard restaging == self.restagings else { return }
                         withAnimation(NotchMotion.unfold) { self.model.isExpanded = true }
                         self.updateInteractiveRects()
                     }
@@ -472,10 +490,10 @@ final class NotchWindowController {
 
     /// Half the crossing, each way. Short: it is a settings change, not a
     /// flourish, and the notch should be back before you have looked up.
-    private static let edgeCrossfade: TimeInterval = 0.16
+    private static let crossfade: TimeInterval = 0.16
     /// The pause between landing and opening.
     private static let arrivalBeat: TimeInterval = 0.05
-    private var edgeChange = 0
+    private var restagings = 0
 
     func apply(_ visibility: NotchVisibility) {
         switch visibility {

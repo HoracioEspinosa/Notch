@@ -394,3 +394,90 @@ final class AlwaysShowTests: XCTestCase {
         XCTAssertTrue(controller.model.staysOpen)
     }
 }
+
+/// Changing the size re-measures every constant in the app at once, so the
+/// question these ask is not whether the arithmetic is right — that is pinned
+/// elsewhere — but whether the running app ever *asks* for it again. A setting
+/// that only takes effect on the next launch is a setting that looks broken.
+@MainActor
+final class NotchSizeChangeTests: XCTestCase {
+    private func pump(_ seconds: TimeInterval) {
+        RunLoop.current.run(until: Date().addingTimeInterval(seconds))
+    }
+
+    /// `Design.size` is global and the bundle runs in one process, so a size
+    /// left behind here is a wrong answer in whichever test happens to run
+    /// next. Put back on every path out.
+    override func tearDown() {
+        Design.size = .standard
+        super.tearDown()
+    }
+
+    func testTheNotchIsRedrawnSmallerWithoutARestart() {
+        let controller = NotchWindowController()
+        controller.show()
+        defer { controller.stop() }
+
+        let shape = controller.model.shapeLength
+        let cardWidth = NotchLayout.cardWidth
+        guard let before = controller.panelFrameForTesting else {
+            return XCTFail("no panel")
+        }
+
+        controller.apply(size: .compact)
+        pump(1.0)
+
+        XCTAssertEqual(controller.model.size, .compact)
+        // The model mirrors the choice into `Design`, which is where every
+        // measurement in the app actually reads it from. Without this the
+        // picker would move and nothing else would.
+        XCTAssertEqual(Design.size, .compact)
+
+        XCTAssertEqual(controller.model.shapeLength,
+                       shape * NotchSize.compactFactor, accuracy: 0.001,
+                       "the shape kept the size it was first drawn at")
+        // The panel is framed by AppKit, not by SwiftUI, so it has to be
+        // re-framed for the smaller notch or the drawing shrinks inside a
+        // window still holding the old footprint.
+        //
+        // It narrows, but by less than half — and that gap is the feature, not
+        // slop in the assert. The panel holds the notch *and* the tooltip, and
+        // only the notch's share of it moved; a panel that did halve would be
+        // one that had taken the card down with it.
+        let after = controller.panelFrameForTesting?.width ?? -1
+        XCTAssertLessThan(after, before.width,
+                          "the panel kept its full-size footprint")
+        XCTAssertGreaterThan(after, before.width * NotchSize.compactFactor,
+                             "the panel shrank the tooltip along with the notch")
+        XCTAssertEqual(NotchLayout.cardWidth, cardWidth, accuracy: 0.001,
+                       "the card the panel is holding shrank with the notch")
+        XCTAssertEqual(controller.panelAlphaForTesting, 1, accuracy: 0.01,
+                       "the notch never came back")
+    }
+
+    /// It goes out and comes back the same way a move does, rather than jumping
+    /// in place — every measurement changes in one frame either way.
+    func testItCrossesRatherThanJumping() {
+        let controller = NotchWindowController()
+        controller.show()
+        defer { controller.stop() }
+
+        controller.apply(size: .compact)
+        pump(0.08)
+
+        XCTAssertLessThan(controller.panelAlphaForTesting, 1,
+                          "the notch was still on screen while it resized")
+    }
+
+    /// Asking for the size it is already drawn at is not a change.
+    func testAskingForTheSameSizeDoesNothing() {
+        let controller = NotchWindowController()
+        controller.show()
+        defer { controller.stop() }
+
+        controller.apply(size: controller.model.size)
+        pump(0.08)
+        XCTAssertEqual(controller.panelAlphaForTesting, 1,
+                       "it faded for a change it was not making")
+    }
+}

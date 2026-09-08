@@ -26,6 +26,11 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(notchEdge.rawValue, forKey: Keys.edge) }
     }
 
+    /// How big the notch is drawn.
+    @Published var notchSize: NotchSize {
+        didSet { defaults.set(notchSize.rawValue, forKey: Keys.size) }
+    }
+
     /// Where the app itself shows up: Dock, menu bar, or nowhere.
     @Published var appPresence: AppPresence {
         didSet { defaults.set(appPresence.rawValue, forKey: Keys.presence) }
@@ -59,6 +64,7 @@ final class Preferences: ObservableObject {
         static let visibility = "notchVisibility"
         static let presence = "appPresence"
         static let edge = "notchEdge"
+        static let size = "notchSize"
         static let lastSeenVersion = "lastSeenVersion"
     }
 
@@ -113,6 +119,11 @@ final class Preferences: ObservableObject {
         // side of a Mac that no system chrome claims by default.
         self.notchEdge = defaults.string(forKey: Keys.edge)
             .flatMap(NotchEdge.init(rawValue:)) ?? .right
+        // Absent means never chosen, and the size the app has always drawn at
+        // is the only safe answer: nobody who merely updates should find their
+        // notch has halved on its own.
+        self.notchSize = defaults.string(forKey: Keys.size)
+            .flatMap(NotchSize.init(rawValue:)) ?? .standard
         // Absent means nothing has been shown yet, which is true of a fresh
         // install — so the current release reads as new to it.
         self.lastSeenVersion = defaults.string(forKey: Keys.lastSeenVersion)

@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 @testable import Codenotch
 
@@ -883,7 +884,7 @@ final class StatusMessageHeightTests: XCTestCase {
             ("stale", .stale(since: .distantPast)),
             ("ok", .ok)
         ]
-        return [("claude", "Claude"), ("cursor", "Cursor"),
+        return [("claude", "Claude"), ("claude-work", "Claude (work)"), ("cursor", "Cursor"),
                 ("codex", "Codex"), ("gemini", "Antigravity")].flatMap { id, name in
             states.map { state in
                 ("\(id)/\(state.0)",
@@ -947,5 +948,284 @@ final class StatusMessageHeightTests: XCTestCase {
                 "\(name): a status card overflows the panel"
             )
         }
+    }
+}
+
+/// The size setting resizes the notch and stops there. Three claims fall out of
+/// that, and all three are worth pinning: the notch really is half the size,
+/// it is still the *same design* at that size — every proportion the frame fixes
+/// survives the change — and the hover card does not move at all.
+///
+/// The third is the one a reader is most likely to talk themselves out of, so
+/// it has tests of its own below. The card is what a user opens in order to read
+/// it; a smaller notch that also halves the detail has taken away the thing the
+/// detail was for.
+final class NotchSizeTests: XCTestCase {
+    /// `Design.size` is global, and the whole bundle runs in one process. A
+    /// test that changes it and does not put it back poisons every test that
+    /// runs after it — differently depending on the order XCTest happens to
+    /// pick, which is the worst kind of failure to chase. Restoring it is not
+    /// tidiness; it is the only thing keeping this file from being flaky.
+    override func tearDown() {
+        Design.size = .standard
+        super.tearDown()
+    }
+
+    /// A spread wide enough to catch one constant that failed to move with the
+    /// rest: the body, a ring, the pill, the orb.
+    ///
+    /// Every figure here is pure frame arithmetic, so it scales exactly. The
+    /// ones measured off a real font are in `proportions()` instead — a line
+    /// box is rounded up to a whole point at each size, so half of one is not
+    /// quite the other.
+    private func notchFigures() -> [String: CGFloat] {
+        [
+            "ring": NotchLayout.ringDiameter,
+            "body depth": NotchLayout.sideBodyDepth,
+            "cell spacing": NotchLayout.cellSpacing,
+            "curl radius": NotchLayout.curlRadius,
+            "pill height": NotchLayout.pillHeight,
+            "pill hot zone": NotchLayout.pillHotZone,
+            "orb diameter": NotchLayout.orbDiameter,
+            "orb arc radius": NotchLayout.orbArcRadius,
+            "orb hot zone": NotchLayout.orbHotZone,
+        ]
+    }
+
+    /// The card, edge to edge: its frame, its inner rhythm, the tail that
+    /// welds it to the notch, and the depth the panel reserves for the pair.
+    private func cardFigures() -> [String: CGFloat] {
+        [
+            "card width": NotchLayout.cardWidth,
+            "card corner": NotchLayout.cardCorner,
+            "card padding": NotchLayout.cardPadding,
+            "card text width": NotchLayout.cardTextWidth,
+            "card body line height": NotchLayout.cardBodyLineHeight,
+            "card title line height": NotchLayout.cardTitleLineHeight,
+            "card glyph": NotchLayout.cardGlyph,
+            "bar height": NotchLayout.barHeight,
+            "block spacing": NotchLayout.blockSpacing,
+            "hairline": NotchLayout.hairline,
+            "status dot": NotchLayout.statusDot,
+            "tail length": NotchLayout.tailLength,
+            "tail height": NotchLayout.tailHeight,
+            "tail gap": NotchLayout.tailGap,
+            "tooltip depth": NotchLayout.tooltipDepth(for: .right),
+            "card height": NotchLayout.cardHeight(windowCount: 4, sessionCount: 2),
+        ]
+    }
+
+    /// The notch expressed against the ring, which is the design's own anchor —
+    /// so these numbers should not move at all.
+    ///
+    /// Only notch measurements belong here. Anything on the card is now
+    /// deliberately *out* of proportion with the ring at compact size, which is
+    /// the whole point of the split and not something to pin against it.
+    private func proportions() -> [String: CGFloat] {
+        let ring = NotchLayout.ringDiameter
+        return [
+            "body depth": NotchLayout.bodyDepth(for: .right) / ring,
+            "horizontal body depth": NotchLayout.bodyDepth(for: .top) / ring,
+            "cell pitch": NotchLayout.cellPitch(for: .right) / ring,
+            "cell extent": NotchLayout.cellExtent / ring,
+            "shape length": NotchLayout.shapeLength(cellCount: 4) / ring,
+        ]
+    }
+
+    func testCompactIsHalfTheSize() {
+        // The standard reading is taken first on purpose. Every one of these
+        // constants used to be a `static let`, which Swift evaluates once and
+        // freezes for the life of the process — so measuring the standard size
+        // before switching is exactly what would pin them there, and the two
+        // readings below would come back identical.
+        Design.size = .standard
+        let standard = notchFigures()
+
+        Design.size = .compact
+        let compact = notchFigures()
+
+        for (name, value) in standard {
+            XCTAssertEqual(
+                compact[name] ?? .nan, value * NotchSize.compactFactor, accuracy: 0.001,
+                "\(name) did not shrink with the rest of the notch"
+            )
+        }
+    }
+
+    /// The requirement in one assert: a compact notch, a full-size card.
+    ///
+    /// Every figure the card is built from, at both settings, expected to come
+    /// back byte-identical. Not "roughly the same" and not "shrunk less" —
+    /// a card that shrinks at all is a card whose 9.5pt body copy is on its way
+    /// to being unreadable, and there is no half-measure between those two.
+    func testTheCardIsTheSameSizeAtEitherSetting() {
+        Design.size = .standard
+        let standard = cardFigures()
+
+        Design.size = .compact
+        let compact = cardFigures()
+
+        for (name, value) in standard {
+            XCTAssertEqual(
+                compact[name] ?? .nan, value, accuracy: 0.001,
+                "\(name) shrank with the notch — the card is meant to be read, not glanced at"
+            )
+        }
+    }
+
+    /// Named on their own as well as inside the sweep above, because these four
+    /// are the ones a reader will look for: the card's frame, its inset, its
+    /// line rhythm, and the face the detail is actually set in.
+    func testTheCardsOwnMeasurementsIgnoreTheSetting() {
+        Design.size = .standard
+        let width = NotchLayout.cardWidth
+        let padding = NotchLayout.cardPadding
+        let lineHeight = NotchLayout.cardBodyLineHeight
+        let body = Typography.cardBody
+
+        Design.size = .compact
+        XCTAssertEqual(NotchLayout.cardWidth, width, accuracy: 0.001)
+        XCTAssertEqual(NotchLayout.cardPadding, padding, accuracy: 0.001)
+        XCTAssertEqual(NotchLayout.cardBodyLineHeight, lineHeight, accuracy: 0.001)
+        XCTAssertEqual(Typography.cardBody, body,
+                       "the card's body type shrank with the notch")
+    }
+
+    /// A wrapped paragraph is the case the split exists for: the column it
+    /// wraps into and the lines it wraps to are both card measurements, so a
+    /// status message takes exactly as much room at either setting.
+    func testWrappedCardTextTakesTheSameRoomAtEitherSetting() {
+        let message = "Codenotch was refused access to Claude's saved login. "
+                    + "Click this ring to ask again, and choose Always Allow."
+
+        Design.size = .standard
+        let standard = NotchLayout.bodyTextHeight(message)
+
+        Design.size = .compact
+        XCTAssertEqual(NotchLayout.bodyTextHeight(message), standard, accuracy: 0.001,
+                       "the status message re-wrapped when only the notch should have moved")
+    }
+
+    /// Compact is a smaller notch, not a different one.
+    func testTheFramesProportionsSurviveTheChange() {
+        Design.size = .standard
+        let standard = proportions()
+
+        Design.size = .compact
+        let compact = proportions()
+
+        for (name, ratio) in standard {
+            // Loose, because the figures that include a line of type include a
+            // line box rounded up to a whole point, and that rounding is a
+            // larger fraction of a smaller ring. A constant that had genuinely
+            // stayed behind would be out by a factor, not by a few percent.
+            XCTAssertEqual(
+                compact[name] ?? .nan, ratio, accuracy: 0.2,
+                "\(name) is no longer in the design's proportions at compact size"
+            )
+        }
+    }
+
+    /// The notch's own type has to come with it, or a compact notch is a small
+    /// shape with full-size percentages spilling out of it. This is the label
+    /// under the ring — a number read at a glance, not a paragraph.
+    func testTheNotchsTypeScalesToo() {
+        Design.size = .standard
+        let standard = Design.fontSize(capPixels: 27)
+
+        Design.size = .compact
+        XCTAssertEqual(Design.fontSize(capPixels: 27),
+                       standard * NotchSize.compactFactor, accuracy: 0.001)
+    }
+
+    /// Where the two scales meet, and the only place they can go wrong.
+    ///
+    /// The card hangs off the notch's inner face by the tail and its gap, and
+    /// the notch's face moves while the tail does not. Nothing here should
+    /// change with the setting except how far in the face itself is — so the
+    /// tail must still clear the body by exactly one gap, and the card must
+    /// still start beyond the tail, or a compact notch would have a full-size
+    /// card lying across it.
+    func testTheCardStillClearsTheNotchAtEitherSize() {
+        for size in NotchSize.allCases {
+            Design.size = size
+            for edge in [NotchEdge.right, .top] {
+                let body = NotchLayout.bodyDepth(for: edge)
+                let tip = body + NotchLayout.tailGap
+                XCTAssertGreaterThan(
+                    tip, body,
+                    "the tail tip is inside the notch body at \(size) on \(edge)"
+                )
+                XCTAssertEqual(
+                    tip - body, NotchLayout.tailGap, accuracy: 0.001,
+                    "the pointer's crossing shrank with the notch at \(size) on \(edge)"
+                )
+                XCTAssertGreaterThan(
+                    NotchLayout.tooltipDepth(for: edge), tip - body,
+                    "the panel does not reserve room for the card at \(size) on \(edge)"
+                )
+            }
+        }
+    }
+
+    /// The panel has to stay wide enough for a card that no longer shrinks with
+    /// it. `slack` takes the larger of the notch's own end room and half a card,
+    /// so at compact size the card is what decides — and if it ever stopped
+    /// deciding, the first and last provider's tooltips would be clipped at the
+    /// ends of the panel.
+    func testTheEndsKeepRoomForAFullSizeCard() {
+        Design.size = .compact
+        XCTAssertGreaterThanOrEqual(
+            NotchLayout.slack(for: .top),
+            NotchLayout.cardWidth / 2 + NotchLayout.cardCorner,
+            "half a full-size card no longer fits past the end of a compact stack"
+        )
+    }
+
+    func testStandardIsTheSizeTheSpecAnchors() {
+        Design.size = .compact
+        Design.size = .standard
+        XCTAssertEqual(NotchLayout.ringDiameter, 44, accuracy: 0.001)
+    }
+
+    func testEverySizeIsOfferedAndNamed() {
+        XCTAssertEqual(NotchSize.allCases.count, 2)
+        for size in NotchSize.allCases {
+            XCTAssertFalse(size.title.isEmpty)
+            XCTAssertFalse(size.explanation.isEmpty)
+        }
+    }
+}
+
+/// The stored size, which has one answer that matters more than the rest: an
+/// existing install must not find its notch has halved on its own.
+final class NotchSizePreferenceTests: XCTestCase {
+    private func defaults() -> UserDefaults {
+        let name = "NotchSizeTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        return defaults
+    }
+
+    @MainActor
+    func testItDefaultsToStandard() {
+        XCTAssertEqual(Preferences(defaults: defaults()).notchSize, .standard)
+    }
+
+    @MainActor
+    func testTheChoiceSurvivesARestart() {
+        let defaults = defaults()
+        Preferences(defaults: defaults).notchSize = .compact
+        XCTAssertEqual(Preferences(defaults: defaults).notchSize, .compact)
+    }
+
+    /// A value written by a future version, or corrupted, falls back to the
+    /// size the app has always drawn at rather than to whichever case happens
+    /// to be first.
+    @MainActor
+    func testAnUnknownStoredValueFallsBackToStandard() {
+        let defaults = defaults()
+        defaults.set("enormous", forKey: "notchSize")
+        XCTAssertEqual(Preferences(defaults: defaults).notchSize, .standard)
     }
 }

@@ -40,6 +40,21 @@ final class NotchViewModel: ObservableObject {
     /// Which screen edge the notch is welded to. Everything geometric reads
     /// this through `placement` rather than assuming an axis.
     @Published var edge: NotchEdge = .right
+
+    /// How big the notch is drawn.
+    ///
+    /// Held here as well as in `Design` because the two answer different
+    /// questions. `Design.size` is what the layout constants read, and it is a
+    /// plain static — nothing observes it, so writing it alone changes every
+    /// measurement and redraws none of them. This is the published half: the
+    /// whole view tree already observes the model, so setting it is what makes
+    /// SwiftUI ask for the layout again at the new scale.
+    ///
+    /// Mirrored on the way in rather than at the call sites, so the two cannot
+    /// drift into disagreeing about how big the notch is.
+    @Published var size: NotchSize = .standard {
+        didSet { Design.size = size }
+    }
     /// The display's own notch, when this edge has to share the bezel with one.
     ///
     /// Set by the window controller from the screen the panel is on, because
@@ -232,6 +247,14 @@ final class NotchViewModel: ObservableObject {
 
     /// Where the tooltip's tail tip sits, measured in from the bezel: just off
     /// the inner face of a shape that the extension has made deeper.
+    ///
+    /// The seam between the two design scales, and the reason it is measured
+    /// from the body rather than assumed: `bodyDepth` travels with the notch
+    /// size while `tailGap` does not. Adding them keeps the card exactly one
+    /// gap clear of whatever depth the notch is currently drawn at, so a
+    /// compact notch pulls the card in with it instead of leaving it floating
+    /// over open bezel — and a fixed inset, which would have been the obvious
+    /// simplification while both halves scaled together, would do neither.
     var tooltipInset: CGFloat {
         contentInset + NotchLayout.bodyDepth(for: edge) + NotchLayout.tailGap
     }

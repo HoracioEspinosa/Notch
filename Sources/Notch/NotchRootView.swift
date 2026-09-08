@@ -51,9 +51,12 @@ struct NotchRootView: View {
                         // What must not interpolate is its contents — see
                         // `TooltipCard`.
                         .position(tooltipCentre(place, index: index, snapshot: snapshot))
+                        // The card's own scale, like the rest of it: this is
+                        // how far the card slides, and the card is the same
+                        // object at either notch size.
                         .transition(.opacity.combined(with: .offset(
-                            x: model.edge.outward.x * Design.px(24),
-                            y: model.edge.outward.y * Design.px(24)
+                            x: model.edge.outward.x * Design.readingPx(24),
+                            y: model.edge.outward.y * Design.readingPx(24)
                         )))
                 }
             }

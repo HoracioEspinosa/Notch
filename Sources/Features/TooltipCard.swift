@@ -120,7 +120,7 @@ private struct TooltipHeader<Mark: View>: View {
                 .font(Typography.cardTitle)
                 .foregroundStyle(Palette.textPrimary)
             if let note {
-                Spacer(minLength: Design.px(20))
+                Spacer(minLength: Design.readingPx(20))
                 Text(note)
                     .font(Typography.cardBody)
                     .foregroundStyle(Palette.textSecondary)
@@ -142,7 +142,7 @@ private struct SplitRow<Accessory: View>: View {
     @ViewBuilder var accessory: () -> Accessory
 
     var body: some View {
-        HStack(spacing: Design.px(20)) {
+        HStack(spacing: Design.readingPx(20)) {
             Text(leading).foregroundStyle(leadingColor)
             Spacer(minLength: 0)
             HStack(spacing: NotchLayout.statusDotGap) {
@@ -284,7 +284,7 @@ private struct ProviderTooltip: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             TooltipHeader(title: "\(snapshot.displayName) Usage", note: readingAge) {
-                ProviderGlyphView(glyph: snapshot.glyph)
+                ProviderGlyphView(glyph: snapshot.glyph, size: NotchLayout.cardGlyph)
                     .foregroundStyle(Palette.textPrimary)
             }
 

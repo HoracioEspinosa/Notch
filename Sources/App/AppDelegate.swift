@@ -23,6 +23,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             || NSClassFromString("XCTestCase") != nil
     }
 
+    /// Every Claude Code configuration directory worth drawing — `~/.claude`
+    /// and any `~/.claude-<slug>` that has been signed in to or is the only one
+    /// there is — found once at launch. Each gets a usage provider and a
+    /// session monitor of its own, keyed by the same id, so a work login's
+    /// sessions spin the work ring and nobody else's.
+    private let claudeProfiles = ClaudeProfile.discover()
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Set here, not in the Info.plist: this call is applied at launch and
         // overrides `LSUIElement` either way. Removing the plist key alone left
@@ -60,9 +67,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // very first list it draws already excludes them. Constructed first,
             // it drew every provider from the archive and only dropped the
             // switched-off ones once the binding below delivered.
+            Log.usage.info("claude profiles: \(self.claudeProfiles.map(\.displayPath).joined(separator: ", "), privacy: .public)")
             let store = UsageStore(
-                providers: [ClaudeOAuthProvider(), CursorLocalProvider(),
-                            CodexLocalProvider(), AntigravityProvider()]
+                providers: claudeProfiles.map { ClaudeOAuthProvider(profile: $0) }
+                    + [CursorLocalProvider(), CodexLocalProvider(), AntigravityProvider()]
                     + webProviders,
                 disconnected: preferences.disconnectedProviders
             )
@@ -73,6 +81,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // this, every launch on any other edge opens with a flash of the
             // right-hand one and then crossfades away from it.
             controller.model.edge = preferences.notchEdge
+            // And for the same reason the stored size does too — it reaches
+            // `Design`, which every measurement in the app is taken from, so
+            // arriving late would mean the first panel was built at one size
+            // and everything after it at another.
+            controller.model.size = preferences.notchSize
 
             let updater = Updater()
             self.updater = updater
@@ -138,6 +151,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .sink { [weak controller] in controller?.apply(edge: $0) }
                 .store(in: &cancellables)
 
+            preferences.$notchSize
+                .receive(on: RunLoop.main)
+                .sink { [weak controller] in controller?.apply(size: $0) }
+                .store(in: &cancellables)
+
             preferences.$disconnectedProviders
                 .receive(on: RunLoop.main)
                 .sink { [weak store] in store?.disconnected = $0 }
@@ -177,12 +195,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // What each agent is doing right now, so the notch can say whether it is
         // still working without you switching to it.
-        let monitors: [String: any AgentActivityMonitor] = [
-            "claude": ClaudeSessionMonitor(),
+        var monitors: [String: any AgentActivityMonitor] = [
             "cursor": CursorActivityMonitor(),
             "codex": CodexActivityMonitor(),
             "gemini": AntigravityActivityMonitor()
         ]
+        for profile in claudeProfiles {
+            monitors[profile.id] = ClaudeSessionMonitor(directory: profile.sessionsDirectory)
+        }
         for (id, monitor) in monitors {
             monitor.sessionsPublisher
                 .receive(on: RunLoop.main)

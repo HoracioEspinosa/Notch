@@ -167,3 +167,141 @@ verify-release:
 	codesign --verify --deep --strict --verbose=2 $(RELEASE_DIR)/mnt/$(APP_NAME).app
 	spctl --assess --type execute --verbose=4 $(RELEASE_DIR)/mnt/$(APP_NAME).app
 	hdiutil detach $(RELEASE_DIR)/mnt
+
+# --- Local install -----------------------------------------------------------
+# `make install-local` puts a build in /Applications on this machine. It is not
+# the release path and produces nothing shippable: no Developer ID, no Apple
+# notarization, so the result is an app only this Mac will open without a
+# fight. Everything above stays the route for anyone else's machine.
+#
+# One-time setup, which you have to run yourself because it touches the
+# keychain: Keychain Access → Certificate Assistant → Create a Certificate,
+# name it exactly "Codenotch Local Signing", identity type Self Signed Root,
+# certificate type Code Signing, and leave it in the login keychain.
+
+LOCAL_DIR     := build/local
+# A derived data tree of its own, under build/ rather than in the shared one.
+# It keeps the products next to .metadata_never_index, and it keeps the
+# Sparkle artifacts that `appcast` searches for in the shared DerivedData
+# pointing at a release build instead of a self-signed one.
+LOCAL_DERIVED := $(LOCAL_DIR)/DerivedData
+LOCAL_APP     := $(LOCAL_DERIVED)/Build/Products/Release/$(APP_NAME).app
+LOCAL_DMG     := $(LOCAL_DIR)/$(APP_NAME).dmg
+INSTALLED_APP := /Applications/$(APP_NAME).app
+
+# Self-signed and sitting in the login keychain, so `security find-identity`
+# marks it CSSMERR_TP_NOT_TRUSTED — expected, and no obstacle: codesign signs
+# with it and the result satisfies its own designated requirement. The reason
+# to hold a certificate at all rather than sign ad-hoc is the keychain ACL:
+# it remembers which signed binary was allowed to read Claude Code's OAuth
+# token, and ad-hoc signing mints a new identity per build, so "Always Allow"
+# is forgotten on every rebuild. Should a second certificate ever end up with
+# the same common name, put the SHA-1 here instead —
+# 806A2ECF36C1641C351CF15508EFB36187D4C1AF — which resolves to exactly one.
+LOCAL_IDENTITY := Codenotch Local Signing
+
+# project.yml pins the Developer ID identity and team 6WFPL8B9FB because that
+# is what a public release needs, and those are correct there — a machine
+# without that certificate simply cannot build against them, and the build
+# fails outright rather than degrading. Overriding on the command line is what
+# keeps project.yml honest for release.
+#
+# Hardened runtime is off here, and putting it back is how the app stops
+# launching. It turns on library validation, and dyld then demands that the
+# process and every non-platform library it loads carry the *same* Team ID. A
+# self-signed certificate has no Team ID at all, so the app and the copy of
+# Sparkle.framework embedded next to it both report "not set" — and absent is
+# not equal, so the load is refused. The failure is invisible until launch:
+# the build reports ** BUILD SUCCEEDED **, `codesign --verify --strict` passes
+# on both the app and the framework, and then the process takes SIGABRT before
+# main with `Library not loaded: @rpath/Sparkle.framework/Versions/B/Sparkle`
+# and "mapping process and mapped file (non-platform) have different Team IDs".
+# `archive` is unaffected: a Developer ID certificate carries a Team ID, so the
+# comparison has something to match, which is why the shipped build keeps the
+# flag — notarization requires it, per the note in project.yml.
+#
+# The flag could also be kept by granting the com.apple.security.cs.disable-
+# library-validation entitlement, but that means carrying an entitlements file
+# that exists only for local builds. Turning the flag off reaches the same
+# place with one fewer file to keep in sync.
+LOCAL_SIGNING := CODE_SIGN_IDENTITY="$(LOCAL_IDENTITY)" DEVELOPMENT_TEAM="" CODE_SIGN_STYLE=Manual ENABLE_HARDENED_RUNTIME=NO
+
+.PHONY: build-local dmg-local install-local uninstall-local
+
+build-local: gen
+	mkdir -p $(LOCAL_DIR)
+	@# Spotlight indexes build output as installed applications, so a Release
+	@# build under build/ leaves extra "Codenotch" entries in app search next
+	@# to the real one in /Applications. This stops the whole tree being
+	@# indexed.
+	@touch build/.metadata_never_index
+	@# Not wiped first, unlike the release tree in `archive`. A release has to
+	@# be reproducible from nothing; this one only has to be current, and
+	@# rebuilding Sparkle from scratch on every install is minutes of waiting
+	@# for an identical result.
+	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination '$(DEST)' \
+		-configuration Release -derivedDataPath $(LOCAL_DERIVED) \
+		$(LOCAL_SIGNING) build
+
+# The same read-only compressed image as the release one, minus the signature
+# on the image itself — that exists to satisfy notarization, which this never
+# goes through. Worth having anyway as the artifact you keep for a rollback or
+# carry to another Mac of your own.
+dmg-local: build-local
+	rm -f $(LOCAL_DMG)
+	rm -rf $(LOCAL_DIR)/stage
+	mkdir -p $(LOCAL_DIR)/stage
+	cp -R $(LOCAL_APP) $(LOCAL_DIR)/stage/
+	ln -s /Applications $(LOCAL_DIR)/stage/Applications
+	hdiutil create -volname "$(APP_NAME)" -srcfolder $(LOCAL_DIR)/stage \
+		-ov -format UDZO $(LOCAL_DMG)
+	@# The app is inside the image now, and a loose copy left in staging is one
+	@# more "Codenotch" for anything walking the tree to find.
+	rm -rf $(LOCAL_DIR)/stage
+
+# Everything in one command: generate, build, package, install.
+install-local: dmg-local
+	@# The running copy goes first. Replacing the bundle underneath a live
+	@# process leaves the old build running, so the change looks like it never
+	@# landed, and quitting later can write state back over the new install.
+	pkill -x $(APP_NAME) || true
+	rm -rf $(INSTALLED_APP)
+	@# ditto, not cp -R: it is the copy that preserves a bundle's extended
+	@# attributes and symlinks intact, and a mangled bundle is a signature that
+	@# no longer verifies.
+	ditto $(LOCAL_APP) $(INSTALLED_APP)
+	@# Proof the identity took, and the check that matters for the keychain:
+	@# a bundle that satisfies its designated requirement is one the ACL can
+	@# keep recognising across rebuilds. `spctl` is deliberately absent — it
+	@# answers whether Gatekeeper would admit a download, which a self-signed
+	@# unnotarized app never is, and says nothing about a bundle built here
+	@# that carries no quarantine flag.
+	codesign --verify --strict --verbose=2 $(INSTALLED_APP)
+	@# A signature that verifies is not the same as a binary that loads. Signing
+	@# with a certificate that carries no Team ID is exactly the kind of thing
+	@# dyld rejects at map time while every earlier step reports success — the
+	@# build succeeds, codesign verifies the app and its embedded frameworks,
+	@# and the process still takes SIGABRT before reaching main. The only check
+	@# that catches that is starting the thing, so the target ends by doing it.
+	open $(INSTALLED_APP)
+	@# Long enough to matter and no longer: a library that fails to map takes
+	@# the process down before main, so anything still alive here got past
+	@# dyld. A bare pgrep is trustworthy because the pkill above clears the
+	@# field first, leaving only the copy just launched to find.
+	sleep 4
+	@pgrep -x $(APP_NAME) >/dev/null || { printf '%s\n' \
+		'$(APP_NAME) launched and died. The newest report in' \
+		'~/Library/Logs/DiagnosticReports/$(APP_NAME)-*.ips says why: a library' \
+		'that failed to load is logged there as "namespace: DYLD" with' \
+		'"Library not loaded", which means the app and an embedded framework' \
+		'disagree about their signatures — not that the build is broken.' >&2; \
+		exit 1; }
+	@echo "Installed: $(INSTALLED_APP)"
+	@echo "Disk image: $(LOCAL_DMG)"
+
+# Leaves the keychain alone. The "Always Allow" answer lives on Claude Code's
+# own keychain item, not on anything this app owns, and dropping it would only
+# mean answering the prompt again after the next install.
+uninstall-local:
+	pkill -x $(APP_NAME) || true
+	rm -rf $(INSTALLED_APP)
